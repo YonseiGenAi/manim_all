@@ -177,7 +177,7 @@ class CNNParamScene(Scene):
                 ).move_to(patch_group)
 
                 # 커널 이동
-                self.play(ReplacementTransform(kernel_grid, patch_box), run_time=0.25)
+                self.play(ReplacementTransform(kernel_grid, patch_box), run_time=0.15)
                 kernel_grid = patch_box
 
                 # 결과 계산 및 저장
@@ -186,10 +186,10 @@ class CNNParamScene(Scene):
 
                 txt = MathTex(str(acc)).scale(0.45).set_color(WHITE)
                 txt.move_to(fmap[i*out_size + j].get_center())
-                self.play(FadeIn(txt), run_time=0.15)
+                self.play(FadeIn(txt), run_time=0.05)
 
         self.play(FadeOut(patch_box), run_time=0.3)
-        self.wait(0.5)
+        self.wait(0.3)
 
 
         # === (6) ReLU Activation 단계 ===
@@ -297,7 +297,7 @@ class CNNParamScene(Scene):
             input_label,
             fmap_label,
         )
-        self.play(conv_group.animate.shift(LEFT * 6.5), run_time=1.0)
+        self.play(conv_group.animate.shift(LEFT * 7), run_time=1.0)
 
         # 2) Flatten 라벨
         flatten_label = Text("Flatten", color=PURPLE_B, font_size=32)

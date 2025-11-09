@@ -1,104 +1,86 @@
 # app/main.py
-
-print("🔥 main.py loaded!")
-import sys
-print("✅ Loaded modules:", list(sys.modules.keys())[:10])
-from typing import Any, Dict
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
-from app.llm import call_llm_stage1, call_llm_stage2, validate_ir
-from app.render import render_manim_scene
-from app.render_cnn import render_cnn_scene
+from app.llm import generate_ir_with_validation, call_llm_domain_ir
+from app.render_cnn_matrix import render_cnn_matrix 
+from openai import OpenAI
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+app = FastAPI()
 
 
-
-
-app = FastAPI(title="IR-to-Animation")
-print("✅ LOADED main.py with /explain and /ir_from_trace endpoints")
-
-# ---- Request/Response models ----
-class ExplainReq(BaseModel):
+# ✅ (1) 입력 스키마 정의
+class ParseIRRequest(BaseModel):
     text: str
 
-class IRFromTraceReq(BaseModel):
-    explain: Dict[str, Any]  # stage1에서 받은 JSON 그대로
 
-class GenerateReq(BaseModel):
-    text: str
-    out_format: str | None = "gif"
-    basename: str | None = "result"
+# ✅ (2) LLM을 이용한 도메인 자동 분류 함수
+def detect_domain_via_llm(text: str) -> str:
+    prompt = f"""
+    너는 주어진 문장이 어떤 알고리즘 또는 인공지능 개념을 설명하는지 판단하는 분류기야.
+    가능한 도메인 목록은 다음과 같아:
+    ["cnn_param", "sorting", "transformer", "diffusion", "rnn", "math"]
+    
+    - "cnn_param" : CNN, 합성곱 신경망, convolution, 커널, stride, padding 같은 단어가 포함되면 선택.
+    - "sorting" : 버블 정렬, 선택 정렬, 삽입 정렬, quick sort 등 정렬 알고리즘이면 선택.
+    - "transformer" : self-attention, query/key/value, positional encoding 관련이면 선택.
+    - "diffusion" : diffusion model, stable diffusion, noise, denoising 관련이면 선택.
+    - "rnn" : recurrent, sequence, lstm, gru 관련이면 선택.
+    - "math" : 수학적 계산, 행렬, 미분, 확률 등 일반 수학 연산이면 선택.
 
-class GenerateResp(BaseModel):
-    ir: Dict[str, Any]
-    file_path: str
+    문장: "{text}"
 
-class RenderReq(BaseModel):
-    ir: Dict[str, Any]
-    out_format: str | None = "gif"
-    basename: str | None = "embedding_demo"
-
-# ---- Endpoints ----
-@app.post("/explain")
-def explain(req: ExplainReq) -> Dict[str, Any]:
-    """프롬프트1: 알고리즘 설명+예시+trace 생성"""
-    return call_llm_stage1(req.text)
-
-@app.post("/ir_from_trace")
-def ir_from_trace(req: IRFromTraceReq) -> Dict[str, Any]:
-    ir = call_llm_stage2(req.explain)
-    if "events" not in ir: ir["events"] = []
-    errs = validate_ir(ir)
-    print("🧩 Validation errors:", errs)   # 👈 여기에 추가
-    if errs:
-        raise HTTPException(status_code=422, detail=errs)
-    return ir
+    위 문장의 도메인만 하나 골라서 문자열 하나만 출력해.
+    """
+    resp = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0,
+        messages=[
+            {"role": "system", "content": "You are a precise domain classifier."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+    return resp.choices[0].message.content.strip()
 
 
-@app.post("/generate", response_model=GenerateResp)
-def generate(req: GenerateReq):
-    """전체 파이프라인: text → explain → IR → render"""
-    ex = call_llm_stage1(req.text)
-    ir = call_llm_stage2(ex)
-    errs = validate_ir(ir)
-    if errs:
-        raise HTTPException(status_code=422, detail=errs)
-    path = render_manim_scene(
-        ir, out_basename=req.basename or "result", fmt=req.out_format or "gif"
-    )  # manim 호출 경로/옵션은 현재 render.py 규약을 그대로 사용:contentReference[oaicite:0]{index=0}
-    return GenerateResp(ir=ir, file_path=path)
+# ✅ (3) 자연어 → IR 변환
+@app.post("/parse_ir")
+async def parse_ir(req: ParseIRRequest):
+    # 1) 사용자 자연어
+    text = req.text
+
+    # 2) 지금은 CNN 도메인만 다루니 고정
+    domain = "cnn_param"
+
+    # 3) LLM 호출해서 IR(JSON) 생성
+    ir = call_llm_domain_ir(domain, text)
+
+    # 디버깅용으로 콘솔에 찍어보기
+    print("=== 🧠 LLM RAW OUTPUT ===")
+    print(ir)
+    print("=========================")
+
+    # 4) IR 안에서 cnn_param용 설정 꺼내기
+    cnn_ir = ir["ir"]  
+    cnn_cfg = cnn_ir.get("params", {})              # {"metadata": ..., "params": {...}}
+    basename = ir.get("basename", "cnn_forward_param")
+    out_format = ir.get("out_format", "mp4")
+
+    # 5) 바로 영상 렌더링
+    video_path = render_cnn_matrix(
+        cnn_cfg,
+        out_basename=basename,
+        fmt=out_format,
+    )
+
+    # 6) 클라이언트에게 IR + 영상 경로 둘 다 반환
+    return {
+        "ir": ir,
+        "video_path": video_path,
+    }
 
 
-@app.post("/render_embedding")
-def render_embedding(req: dict):
-    domain = req.get("ir", {}).get("metadata", {}).get("domain", "sorting")
-    print(f"⚙️ Detected domain: {domain}")
-
-    # CNN 파라미터 기반 애니메이션
-    if domain == "cnn_param":
-        print("🎞 Using render_cnn_matrix() with param config !!")
-        from app.render_cnn_matrix import render_cnn_matrix
-        cnn_cfg = req.get("ir", {}).get("params", {})
-        path = render_cnn_matrix(cnn_cfg, "cnn_param_demo", fmt="mp4")
-
-    elif domain == "cnn":
-        print("🧠 Using render_cnn_scene() !!")
-        from app.render_cnn import render_cnn_scene
-        path = render_cnn_scene(req["ir"], req.get("basename") or "cnn_demo", fmt=req.get("out_format") or "gif")
-
-    elif domain == "sorting":
-        print("🔢 Using render_manim_scene() !!")
-        from app.render import render_manim_scene
-        path = render_manim_scene(req["ir"], req.get("basename") or "embedding_demo", fmt=req.get("out_format") or "gif")
-
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported domain: {domain}")
-
-    print(f"✅ Render complete -> {path}")
-    return {"file_path": path}
-
-
-@app.post("/render_cnn_matrix")
-def render_cnn_matrix_endpoint(req: dict):
-    from app.render_cnn_matrix import render_cnn_matrix
-    path = render_cnn_matrix(req, "cnn_param_demo", fmt="mp4")
-    return {"file_path": path}
