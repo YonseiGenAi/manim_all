@@ -31,11 +31,10 @@ TEXT:
 {user_text}
 """.strip()
 
-def call_llm_stage1(user_text: str, temperature: float = 0.0) -> Dict[str, Any]:
+def call_llm_stage1(user_text: str) -> Dict[str, Any]:
     prompt = build_prompt_stage1(user_text)
     resp = client.chat.completions.create(
-        model="gpt-4.1-mini",  # 4o-mini/4.1-mini 등으로 조정 가능:contentReference[oaicite:3]{index=3}
-        temperature=temperature,
+        model="gpt-5",  
         response_format={"type": "json_object"},
         messages=[{"role": "system", "content": STAGE1_SYSTEM},
                   {"role": "user", "content": prompt}],
@@ -149,7 +148,7 @@ def call_llm_domain_ir(domain: str, user_text: str, temperature: float = 0.0) ->
             {"role": "user", "content": full_prompt},
         ],
     )
-    
+
     print("\n=== 🧠 LLM RAW OUTPUT ===")
     print(resp.choices[0].message.content)
     print("=========================\n")

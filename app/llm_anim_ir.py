@@ -32,11 +32,10 @@ Convert the following pseudocode into a structured animation plan JSON:
 {json.dumps(pseudocode_json, ensure_ascii=False, indent=2)}
 """
 
-def call_llm_anim_ir(pseudocode_json: dict, temperature: float = 0.0):
+def call_llm_anim_ir(pseudocode_json: dict):
     prompt = build_prompt_anim_ir(pseudocode_json)
     resp = client.chat.completions.create(
-        model="gpt-4.1",
-        temperature=temperature,
+        model="gpt-4.1-mini",
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -44,3 +43,5 @@ def call_llm_anim_ir(pseudocode_json: dict, temperature: float = 0.0):
         ],
     )
     return json.loads(resp.choices[0].message.content)
+
+

@@ -6,17 +6,40 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-SYSTEM_PROMPT = """You are a Manim code generator.
-You receive a structured animation IR (entities, layout, actions) and produce valid Python code
-that can be executed with Manim to visualize the described process.
+REFERENCE_PATH = "app/render_cnn_matrix.py"  # 너가 쓴 파일 경로
+with open(REFERENCE_PATH, "r", encoding="utf-8") as f:
+    reference_code = f.read()
 
-Your output must be a complete, executable Python script containing:
-- from manim import *
-- a Scene subclass named AlgorithmScene
-- use of shapes (Square, Circle, Rectangle, Text, etc.) for entities
-- animations following the actions sequence (FadeIn, MoveTo, Highlight, FadeOut, etc.)
-- DO NOT print or log anything.
-- End with self.wait(2) to pause at the end.
+SYSTEM_PROMPT = f"""
+You are a Manim code generator.
+You will receive a structured animation IR (entities, layout, actions)
+and must produce a complete, executable Python script using Manim.
+
+Below is a **reference example** of excellent Manim code style
+(from render_cnn_matrix). Follow this level of structure, clarity, and animation pacing.
+
+<reference_example>
+{reference_code}
+</reference_example>
+
+IMPORTANT RULES:
+- Always include: `from manim import *`
+- Use Manim's color constants (e.g., BLUE_B, YELLOW_C) instead of hex strings.
+- NEVER compare color objects or convert them to strings.
+- If you need a custom color, write: `color="#abcdef"`, not `hex2color()`.
+- Avoid helper functions that redefine color or gradient handling.
+
+
+Style rules you MUST follow:
+1. Must start with 'from manim import *'.
+2. Define a class named AlgorithmScene(Scene) with construct(self).
+3. Use same object naming conventions as the reference (Square, Text, SurroundingRectangle, etc.).
+4. Use consistent color palette (BLUE_B, YELLOW_B, PURPLE_B, etc.).
+5. Animate logically: FadeIn → Move → Transform → Highlight → FadeOut.
+6. Add descriptive labels (Text) near key components, similar to the CNN example.
+7. Avoid duplicate keyword arguments or redeclarations (like color twice).
+8. Output ONLY valid Python code (no markdown, no prose).
+9. End with self.wait(2).
 """
 
 def build_prompt_codegen(anim_ir: dict) -> str:
@@ -44,11 +67,10 @@ Output:
 
 
 
-def call_llm_codegen(anim_ir: dict, temperature: float = 0.0):
+def call_llm_codegen(anim_ir: dict):
     prompt = build_prompt_codegen(anim_ir)
     resp = client.chat.completions.create(
-        model="gpt-4.1",
-        temperature=temperature,
+        model="gpt-5",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},

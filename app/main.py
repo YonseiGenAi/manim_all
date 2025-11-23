@@ -1,115 +1,103 @@
 # app/main.py
 from fastapi import FastAPI
 from pydantic import BaseModel
+from typing import Optional
+
+from app.llm_domain import call_llm_detect_domain
 from app.llm import call_llm_domain_ir
 from app.render_cnn_matrix import render_cnn_matrix
-from app.llm_pseudocode import call_llm_pseudocode_ir
+from app.llm_pseudocode import call_llm_pseudocode_ir, call_llm_sort_trace
 from app.llm_anim_ir import call_llm_anim_ir
 from app.llm_codegen import call_llm_codegen
-from openai import OpenAI
-import os, tempfile, subprocess
-from dotenv import load_dotenv
+from app.render_sorting import render_sorting
+
+import tempfile
+import subprocess
 import re
+from dotenv import load_dotenv
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-app = FastAPI(title="GenAI Visualization API")
+app = FastAPI()
 
-def sanitize_input_text(text: str) -> str:
-    """
-    사용자가 보낸 긴 자연어 설명을 JSON으로 안전하게 변환하기 위한 전처리기.
-    - 줄바꿈(\n, \r) → 공백으로 변환
-    - 연속 공백 정리
-    - 따옴표 이스케이프
-    - 제어 문자 제거
-    """
-    text = text.replace("\r", " ").replace("\n", " ")   # 줄바꿈 제거
-    text = re.sub(r"\s+", " ", text)                    # 연속 공백 1개로 축소
-    text = text.replace('"', '\\"')                     # 큰따옴표 이스케이프
-    text = re.sub(r"[\x00-\x1f\x7f]", "", text)         # 제어문자 제거
+
+# --------- 요청 스키마 ---------
+class GenerateRequest(BaseModel):
+    text: str
+    domain_hint: Optional[str] = None
+
+
+# --------- 공통 유틸 ---------
+def sanitize_text(text: str) -> str:
+    # 줄바꿈/공백 정리 정도만
+    text = re.sub(r"\s+", " ", text)
     return text.strip()
 
-# (1) 공통 요청 스키마
-class ParseIRRequest(BaseModel):
-    text: str
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
 
 
-# (2) 도메인 자동 감지 함수
-def detect_domain_via_llm(text: str) -> str:
-    prompt = f"""
-    너는 입력 문장이 어떤 알고리즘/AI 개념인지 분류하는 도메인 감지기야.
-    가능한 도메인 목록:
-    ["cnn_param", "sorting", "transformer", "diffusion", "rnn", "cache", "math"]
-
-    - CNN 관련 (커널, stride, padding 등) → cnn_param
-    - 정렬 알고리즘 (버블, 선택, 삽입, quick sort 등) → sorting
-    - Transformer / attention / QKV → transformer
-    - Diffusion / noise / denoising / sampling → diffusion
-    - RNN / LSTM / sequence → rnn
-    - 캐시, FIFO, LRU, queue → cache
-    - 수학적 계산, 미분, 행렬, 확률 → math
-
-    문장: "{text}"
-
-    위 문장의 도메인 이름만 하나 출력해.
-    """
-    resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        temperature=0,
-        messages=[
-            {"role": "system", "content": "You are a strict domain classifier."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    return resp.choices[0].message.content.strip()
-
-
-# (3) CNN 전용 파이프라인
-@app.post("/parse_ir")
-async def parse_ir(req: ParseIRRequest):
-    text = sanitize_input_text(req.text)
-    domain = detect_domain_via_llm(text)
-
-    # CNN 도메인만 여기서 처리
-    if domain != "cnn_param":
-        return {"error": f"This route handles only CNN. Detected domain: {domain}"}
-
-    ir = call_llm_domain_ir(domain, text)
-
-
-    cnn_ir = ir["ir"]
-    cnn_cfg = cnn_ir.get("params", {})
-    basename = ir.get("basename", "cnn_forward_param")
-    out_format = ir.get("out_format", "mp4")
-
-    video_path = render_cnn_matrix(cnn_cfg, out_basename=basename, fmt=out_format)
-    return {"ir": ir, "video_path": video_path}
-
-
-# (4) 범용 애니메이션 파이프라인
+# --------- 단일 엔드포인트 ---------
 @app.post("/generate")
-async def generate_visualization(req: ParseIRRequest):
-    user_text = req.text
+async def generate(req: GenerateRequest):
+    """
+    텍스트 한 번 보내면 도메인 자동 감지해서
+    - cnn_param  → CNN 파라미터 시각화
+    - sorting    → 정렬 trace + 정렬 전용 renderer
+    - 기타       → pseudocode IR → animation IR → LLM Manim 코드 → manim 실행
+    """
+    user_text = sanitize_text(req.text)
 
-    # 1️⃣ 자연어 → pseudocode IR
-    pseudo_ir = call_llm_pseudocode_ir(user_text)
+    # 1) 도메인 결정 (hint 있으면 우선, 없으면 LLM)
+    if req.domain_hint:
+        domain = req.domain_hint
+    else:
+        domain = call_llm_detect_domain(user_text)
 
-    # 2️⃣ pseudocode → structured animation IR
-    anim_ir = call_llm_anim_ir(pseudo_ir)
+    # 2) 도메인별 처리 -----------------------------
 
-    # 3️⃣ animation IR → Manim 코드 생성
-    manim_code = call_llm_codegen(anim_ir)
+    # (1) CNN 파라미터 전용
+    if domain == "cnn_param":
+        ir = call_llm_domain_ir("cnn_param", user_text)
+        params = ir["ir"]["params"]
+        video_path = render_cnn_matrix(params)
+        return {
+            "domain": domain,
+            "ir": ir,
+            "video_path": video_path,
+        }
 
-    # 4️⃣ 코드 저장 + 렌더링
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tmp:
-        tmp.write(manim_code)
-        tmp_path = tmp.name
+    # (2) 정렬 전용 파이프라인 (trace → render_sorting)
+    elif domain == "sorting":
+        sort_trace = call_llm_sort_trace(user_text)
+        video_path = render_sorting(sort_trace)
+        return {
+            "domain": domain,
+            "trace": sort_trace,
+            "video_path": video_path,
+        }
 
-    subprocess.run(["manim", "-ql", tmp_path, "AlgorithmScene", "--format", "mp4"])
+    # (3) 일반 알고리즘/모델 시각화 (pseudocode → anim_ir → manim 코드)
+    else:
+        pseudo_ir = call_llm_pseudocode_ir(user_text)
+        anim_ir = call_llm_anim_ir(pseudo_ir)
+        manim_code = call_llm_codegen(anim_ir)
 
-    return {
-        "pseudocode_ir": pseudo_ir,
-        "anim_ir": anim_ir,
-        "message": "🎬 Visualization generation started successfully!"
-    }
+        # manim 코드 임시 파일로 저장 후 실행
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tmp:
+            tmp.write(manim_code)
+            tmp_path = tmp.name
+
+        subprocess.run(
+            ["manim", "-ql", tmp_path, "AlgorithmScene", "--format", "mp4"],
+            check=True,
+        )
+
+        return {
+            "pseudocode_ir": pseudo_ir,
+            "anim_ir": anim_ir,
+            "domain": domain,
+            "message": "🎬 Visualization generation started successfully!",
+        }
