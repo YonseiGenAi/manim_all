@@ -72,3 +72,111 @@ def invariants_errors(doc: Dict[str, Any]) -> List[str]:
                 errors.append(f"event[{i}] references undefined '{k}': {e[k]}")
 
     return errors
+
+# === seq_attention (Transformer Attention 패턴) IR 스키마 ===
+
+ATTENTION_IR_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "required": ["pattern_type", "tokens", "weights", "query_index"],
+    "properties": {
+        "pattern_type": {
+            "type": "string",
+            "const": "seq_attention",
+        },
+        "raw_text": {                     
+            "type": "string",
+        },
+        "tokens": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+        },
+        "weights": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "oneOf": [
+                    # 1D: [w0, w1, ..., w_{N-1}]
+                    {"type": "number"},
+                    # 2D: [[...], [...], ...] 도 나중에 쓸 수 있게 남겨둠
+                    {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {"type": "number"},
+                    },
+                ]
+            },
+        },
+        "query_index": {
+            "type": "integer",
+            "minimum": 0,
+        },
+        "next_token": {                 
+            "type": "object",
+            "required": ["candidates", "probs"],
+            "properties": {
+                "candidates": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                },
+                "probs": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 1,
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    "additionalProperties": False,     
+}
+
+
+ATTENTION_IR_VALIDATOR = Draft7Validator(ATTENTION_IR_SCHEMA)
+
+
+def validate_attention_ir(doc: Dict[str, Any]) -> List[str]:
+    errors: List[str] = []
+
+    # 1) jsonschema 기반 기본 검증
+    for err in ATTENTION_IR_VALIDATOR.iter_errors(doc):
+        errors.append(err.message)
+
+    tokens = doc.get("tokens", [])
+    weights = doc.get("weights", [])
+
+    # 2) weights 형태 검사
+    if isinstance(weights, list) and weights:
+        first = weights[0]
+
+        # --- case 1: 2D matrix [[...], [...], ...] ---
+        if isinstance(first, list):
+            if len(weights) != len(tokens):
+                errors.append("len(weights) must equal len(tokens) for 2D weights")
+
+            row_len = len(first)
+            if any(len(row) != row_len for row in weights):
+                errors.append("all rows in weights must have the same length")
+
+        # --- case 2: 1D row [w_0, w_1, ..., w_n-1] ---
+        else:
+            if len(weights) != len(tokens):
+                errors.append("len(weights) must equal len(tokens) for 1D weights")
+
+    # 3) query_index 범위 체크
+    qi = doc.get("query_index")
+    if isinstance(qi, int) and not (0 <= qi < len(tokens)):
+        errors.append("query_index out of range")
+
+    # 4) next_token (선택) 검증
+    nt = doc.get("next_token")
+    if nt is not None:
+        cands = nt.get("candidates")
+        probs = nt.get("probs")
+        if not isinstance(cands, list) or not isinstance(probs, list):
+            errors.append("next_token.candidates and probs must be lists")
+        elif len(cands) != len(probs):
+            errors.append("next_token.candidates and probs must have the same length")
+
+    return errors

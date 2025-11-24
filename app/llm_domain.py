@@ -2,7 +2,7 @@
 import os, json
 from openai import OpenAI
 from dotenv import load_dotenv
-
+from app.llm import call_llm_domain_ir
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -45,3 +45,10 @@ def call_llm_detect_domain(user_text: str) -> str:
     data = json.loads(resp.choices[0].message.content)
     domain = data.get("domain", "generic")
     return domain
+
+def build_sorting_trace_ir(user_text: str) -> dict:
+    """
+    자연어 정렬 설명에서 sorting_trace IR을 생성하는 thin wrapper.
+    prompts.py의 DOMAIN_PROMPTS["sorting_trace"]를 사용한다.
+    """
+    return call_llm_domain_ir("sorting_trace", user_text)

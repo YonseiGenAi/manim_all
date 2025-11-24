@@ -3,8 +3,9 @@ import os, json
 from typing import Dict, Any, List, Tuple
 from dotenv import load_dotenv
 from openai import OpenAI
-from app.schema import schema_errors, invariants_errors  # 검증은 기존 함수 재사용:contentReference[oaicite:2]{index=2}
+from app.schema import schema_errors, invariants_errors, validate_attention_ir  # 검증은 기존 함수 재사용:contentReference[oaicite:2]{index=2}
 from app.prompts import DOMAIN_PROMPTS
+from app.patterns import PatternType
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -119,8 +120,11 @@ def call_llm_domain_ir(domain: str, user_text: str, temperature: float = 0.0) ->
         raise ValueError(f"Unknown domain: {domain}")
 
     prompt_cfg = DOMAIN_PROMPTS[domain]
-    base_prompt = prompt_cfg["template"].format(text=user_text)
-
+    if domain == "seq_attention":
+        base_prompt = prompt_cfg["template"].replace("{text}", user_text)
+    else:
+        base_prompt = prompt_cfg["template"].format(text=user_text)
+        
     # ✅ 전 도메인 공통 규칙: 사용자의 수치, 조건, 표현을 절대 변경하지 말 것
     universal_rules = """
     <GLOBAL RULES>
@@ -140,8 +144,7 @@ def call_llm_domain_ir(domain: str, user_text: str, temperature: float = 0.0) ->
 
     # ✅ LLM 호출
     resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        temperature=temperature,
+        model="gpt-5",
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": prompt_cfg["system"]},
@@ -154,3 +157,15 @@ def call_llm_domain_ir(domain: str, user_text: str, temperature: float = 0.0) ->
     print("=========================\n")
 
     return json.loads(resp.choices[0].message.content)
+
+
+def call_llm_attention_ir(user_text: str) -> dict:
+    # 도메인은 pattern과 1:1로 맞춘다
+    raw = call_llm_domain_ir("seq_attention", user_text)
+    # raw가 바로 attn_ir라고 가정 (프롬프트를 그렇게 짰으니까)
+    attn_ir = raw
+
+    errors = validate_attention_ir(attn_ir)
+    if errors:
+        raise ValueError(f"attention IR validation failed: {errors}")
+    return attn_ir
